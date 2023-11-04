@@ -4,7 +4,9 @@ use crate::config::TRAP_CONTEXT_BASE;
 use crate::mm::{
     kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
+
 use crate::trap::{trap_handler, TrapContext};
+use crate::config::MAX_SYSCALL_NUM;
 
 /// The task control block (TCB) of a task.
 pub struct TaskControlBlock {
@@ -28,6 +30,11 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+
+    ///记录system调用task的次数 
+    pub syscall_count: [u32;MAX_SYSCALL_NUM], 
+    ///记录task 启动的时间 
+    pub start_time: usize,
 }
 
 impl TaskControlBlock {
@@ -55,6 +62,10 @@ impl TaskControlBlock {
             kernel_stack_top.into(),
             MapPermission::R | MapPermission::W,
         );
+        // ///记录system调用task的次数 
+        // pub syscall_count: [u32;MAX_SYSCALL_NUM], 
+        // ///记录task 启动的时间 
+        // pub start_time: usize,
         let task_control_block = Self {
             task_status,
             task_cx: TaskContext::goto_trap_return(kernel_stack_top),
@@ -63,6 +74,9 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            syscall_count:[0 as u32; MAX_SYSCALL_NUM],
+            start_time:0 as usize,
+
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -95,6 +109,15 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+    /// check allocated
+    pub fn check_allocated(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        self.memory_set.check_allocated(start, end)
+    }
+
+    /// check all allocated
+    pub fn check_all_allocated(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        self.memory_set.check_all_allocated(start, end)
     }
 }
 

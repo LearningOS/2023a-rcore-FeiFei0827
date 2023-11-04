@@ -33,11 +33,16 @@ lazy_static! {
     pub static ref KERNEL_SPACE: Arc<UPSafeCell<MemorySet>> =
         Arc::new(unsafe { UPSafeCell::new(MemorySet::new_kernel()) });
 }
+
 /// address space
 pub struct MemorySet {
-    page_table: PageTable,
+    page_table: PageTable, //多级页表 
     areas: Vec<MapArea>,
+    //MapArea  http://learningos.cn/rCore-Tutorial-Guide-2023A/chapter4/5kernel-app-spaces.html
+    // 地址空间：一系列有关联的逻辑段 http://learningos.cn/rCore-Tutorial-Guide-2023A/chapter4/5kernel-app-spaces.html
+    // 用来表明正在运行的应用所在执行环境中的可访问内存空
 }
+
 
 impl MemorySet {
     /// Create a new empty `MemorySet`.
@@ -51,6 +56,7 @@ impl MemorySet {
     pub fn token(&self) -> usize {
         self.page_table.token()
     }
+
     /// Assume that no conflicts.
     pub fn insert_framed_area(
         &mut self,
@@ -63,12 +69,56 @@ impl MemorySet {
             None,
         );
     }
+
+    /// delete framed area
+    pub fn delete_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) {
+        let vpn_start = start_va.floor();
+        let vpn_end = end_va.ceil();
+        let mut index = 0;
+        for (i, map) in self.areas.iter_mut().enumerate() {
+            if map.vpn_range.get_start() == vpn_start && map.vpn_range.get_end() == vpn_end {
+                map.unmap(&mut self.page_table);
+                index = i;
+                break;
+            }
+            continue;
+        }
+        self.areas.remove(index);
+    }
+
+     /// check allocated
+     pub fn check_allocated(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        for area in &self.areas {
+            if area.vpn_range.get_end() <= start_vpn || area.vpn_range.get_start() >= end_vpn {
+                continue;
+            } else {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// check all allocated
+    pub fn check_all_allocated(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        for area in &self.areas {
+            if area.vpn_range.get_start() == start_vpn && area.vpn_range.get_end() == end_vpn {
+                return true;
+            }
+        }
+        false
+    }
+
     fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
         map_area.map(&mut self.page_table);
         if let Some(data) = data {
             map_area.copy_data(&mut self.page_table, data);
         }
         self.areas.push(map_area);
+        //如果它是以 Framed 方式映射到物理内存
     }
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
@@ -262,6 +312,50 @@ impl MemorySet {
             false
         }
     }
+
+    /// set the map between virtual page number and physical page number
+    pub fn map_range(&mut self, start: usize, len: usize, prot: usize) -> isize {
+        let st_vpn = VirtAddr::from(start).floor().0;
+        let ed_vpn = VirtAddr::from(start + len - 1).floor().0;
+
+        // println!("{} {}", st_vpn, ed_vpn);
+
+        let flags = PTEFlags::from_bits((prot << 1) as u8).unwrap() | PTEFlags::U;
+
+        for cur_vpn in st_vpn..=ed_vpn {
+            if let Some(pte) = self.translate(VirtPageNum::from(cur_vpn)) {
+                if pte.is_valid() {
+                    return -1;
+                }
+            }
+            self.page_table.map(
+                VirtPageNum::from(cur_vpn),
+                frame_alloc().unwrap().ppn,
+                flags,
+            );
+        }
+        0
+    }
+
+    /// remove the map between virtual page number and physical page number
+    pub fn unmap_range(&mut self, start: usize, len: usize) -> isize {
+        let st_vpn = VirtAddr::from(start).floor().0;
+        let ed_vpn = VirtAddr::from(start + len - 1).floor().0;
+
+        for cur_vpn in st_vpn..=ed_vpn {
+            if let Some(pte) = self.translate(VirtPageNum::from(cur_vpn)) {
+                if pte.is_valid() {
+                    self.page_table.unmap(VirtPageNum::from(cur_vpn));
+                } else {
+                    return -1;
+                }
+            } else {
+                return -1;
+            }
+        }
+        0
+    }
+
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
@@ -270,7 +364,7 @@ pub struct MapArea {
     map_type: MapType,
     map_perm: MapPermission,
 }
-
+// http://learningos.cn/rCore-Tutorial-Guide-2023A/chapter4/5kernel-app-spaces.html
 impl MapArea {
     pub fn new(
         start_va: VirtAddr,

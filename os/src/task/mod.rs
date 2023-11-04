@@ -23,6 +23,11 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+use crate::config::MAX_SYSCALL_NUM;
+use crate::timer::get_time_ms;
+use crate::syscall::process::TaskInfo;
+use crate::mm::VirtAddr;
+use crate::mm::MapPermission;
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -153,6 +158,125 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+    /// add_syscall_count
+    fn add_syscall_count(&self,sys_call_id : usize)
+    {
+        if sys_call_id >= MAX_SYSCALL_NUM {
+            return;
+        }
+        let mut inner = self.inner.exclusive_access(); 
+        let current = inner.current_task;
+        inner.tasks[current].syscall_count[sys_call_id]+=1; //
+    }
+
+    ///获取当前running任务的信息
+     /// 返回：//学到了
+    ///impl TaskInfo {
+    ///    pub fn new() -> Self {
+    ///        TaskInfo {
+    ///            status: TaskStatus::UnInit,
+    ///            syscall_times: [0; MAX_SYSCALL_NUM],
+    ///           time: 0,
+    ///        }
+    ///    }
+     ///}
+     pub fn get_current_task_info(&self) -> TaskInfo {
+        let inner = self.inner.exclusive_access();
+        let current_task_id = inner.current_task; 
+
+        // task list tasks: [TaskControlBlock; MAX_APP_NUM],
+        let current_task = &inner.tasks[current_task_id];
+         
+        let task_info = TaskInfo {
+            status: current_task.task_status.clone(),
+            syscall_times:current_task.syscall_count.clone(),
+        
+            time: get_time_ms() - current_task.start_time,
+        };
+        task_info
+    }
+
+     /// kernel_mmap
+     pub fn kernel_mmap(&self, start_virt_add: VirtAddr, end_virt_add: VirtAddr, port: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current_process_id = inner.current_task;
+        let curr_task_tcb = &mut inner.tasks[current_process_id];
+        //未当前进程分配mmp地址
+        // bitflags! {
+        //     /// map permission corresponding to that in pte: `R W X U`
+        //     pub struct MapPermission: u8 {
+        //         ///Readable
+        //         const R = 1 << 1;
+        //         ///Writable
+        //         const W = 1 << 2;
+        //         ///Excutable
+        //         const X = 1 << 3;
+        //         ///Accessible in U mode
+        //         const U = 1 << 4;
+        //     }
+        // }
+        
+        // allocate
+        let mut map_perm = MapPermission::U;
+        
+        //3 
+        if port & 0x1 != 0 {
+            map_perm |= MapPermission::R;
+        }
+        if port & 0x2 != 0 {
+            map_perm |= MapPermission::W;
+        }
+        if port & 0x3 != 0 {
+            map_perm |= MapPermission::X;
+        }
+
+
+        curr_task_tcb.memory_set.insert_framed_area(start_virt_add, end_virt_add, map_perm);
+        
+        // Assume that no conflicts.
+        let result: isize = 0; // 用具体的返回值示例
+        result // 返回 result 或者根据实际操作返回相应的 isize 值
+    }
+    /// kernel_unmmap
+    pub fn kernel_unmmap(&self, start: VirtAddr, end: VirtAddr) {
+        let mut inner = self.inner.exclusive_access();
+        let current_process_id = inner.current_task;
+        let curr_task_tcb = &mut inner.tasks[current_process_id];
+        // if !curr_task_tcb.memory_set.check_all_allocated(start, end) {
+        //     return -1;
+        // }
+        curr_task_tcb.memory_set.delete_framed_area(start, end);
+        
+    }
+    /// check_all_allocated
+    pub fn check_all_allocated(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].check_all_allocated(start, end)
+    }
+    /// check_allocated
+    fn check_allocated(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].check_allocated(start, end)
+    }
+
+    fn current_task_map(&self, start: usize, len: usize, port: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let task = &mut inner.tasks[current];
+
+        task.memory_set.map_range(start, len, port)
+    }
+
+    fn current_task_unmap(&self, start: usize, len: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let task = &mut inner.tasks[current];
+
+        task.memory_set.unmap_range(start, len)
+    }
+
 }
 
 /// Run the first task in task list.
@@ -201,4 +325,44 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+///
+pub fn add_syscall_count(sys_call_id: usize) {
+    TASK_MANAGER.add_syscall_count(sys_call_id);
+}
+
+///
+pub fn get_task_info() -> TaskInfo{
+    TASK_MANAGER.get_current_task_info()
+}
+
+/// mmap
+pub fn kernel_mmap(start_vpn: VirtAddr, end_vpn: VirtAddr, port: usize) -> isize {
+    TASK_MANAGER.kernel_mmap(start_vpn, end_vpn, port)
+}
+
+/// mmap
+pub fn kernel_unmmap(start_vpn: VirtAddr, end_vpn: VirtAddr)  {
+    TASK_MANAGER.kernel_unmmap(start_vpn, end_vpn)
+}
+
+/// check all allocated
+pub fn check_all_allocated(start: VirtAddr, end: VirtAddr) -> bool {
+    TASK_MANAGER.check_all_allocated(start, end)
+}
+
+/// check allocated
+pub fn check_allocated(start: VirtAddr, end: VirtAddr) -> bool {
+    TASK_MANAGER.check_allocated(start, end)
+}
+
+/// Map current task heap
+pub fn current_task_map(start: usize, len: usize, port: usize) -> isize {
+    TASK_MANAGER.current_task_map(start, len, port)
+}
+
+/// Unmap current task heap
+pub fn current_task_unmap(start: usize, len: usize) -> isize {
+    TASK_MANAGER.current_task_unmap(start, len)
 }

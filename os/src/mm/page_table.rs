@@ -4,7 +4,9 @@ use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPag
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
-
+//https://rcore-os.cn/rCore-Tutorial-Book-v3/chapter4/3sv39-implementation-1.html
+// 页表项的数据结构抽象与类型定义
+//页表项 (PTE, Page Table Entry) 
 bitflags! {
     /// page table entry flags
     pub struct PTEFlags: u8 {
@@ -15,7 +17,7 @@ bitflags! {
         const U = 1 << 4;
         const G = 1 << 5;
         const A = 1 << 6;
-        const D = 1 << 7;
+        const D = 1 << 7; //通常用于表示页面是否已被修改，以支持页面置换策略
     }
 }
 
@@ -29,9 +31,11 @@ pub struct PageTableEntry {
 
 impl PageTableEntry {
     /// Create a new page table entry
+    /// 一个物理页号 PhysPageNum 和一个页表项标志位 PTEFlags 生成一个页表项 PageTableEntry 实例
     pub fn new(ppn: PhysPageNum, flags: PTEFlags) -> Self {
         PageTableEntry {
             bits: ppn.0 << 10 | flags.bits as usize,
+            // SV39 分页模式下的页表项，其中 这 位是物理页号，最低的 位 则是标志位
         }
     }
     /// Create an empty page table entry
@@ -62,6 +66,7 @@ impl PageTableEntry {
     pub fn executable(&self) -> bool {
         (self.flags() & PTEFlags::X) != PTEFlags::empty()
     }
+    //https://rcore-os.cn/rCore-Tutorial-Book-v3/chapter4/3sv39-implementation-1.html
 }
 
 /// page table structure
@@ -73,7 +78,9 @@ pub struct PageTable {
 /// Assume that it won't oom when creating/mapping.
 impl PageTable {
     /// Create a new page table
+    /// 创建一个新的页面表
     pub fn new() -> Self {
+        // https://rcore-os.cn/rCore-Tutorial-Book-v3/chapter4/4sv39-implementation-2.html
         let frame = frame_alloc().unwrap();
         PageTable {
             root_ppn: frame.ppn,
@@ -86,8 +93,13 @@ impl PageTable {
             root_ppn: PhysPageNum::from(satp & ((1usize << 44) - 1)),
             frames: Vec::new(),
         }
+        // 所以，这个表达式的目的是从 satp 中提取出低 44 位，以获得根页表的 PPN。
+        //在虚拟内存系统中，这个 PPN 通常用于确定根页表的物理位置，用于地址转换和页表操作。
+        // 为了方便后面的实现，我们还需要 PageTable 提供一种类似 MMU 操作的手动查页表的方法：
     }
     /// Find PageTableEntry by VirtPageNum, create a frame for a 4KB page table if not exist
+    /// 通过 VirtPageNum 查找 PageTableEntry，如果不存在则创建一个 4KB 页面表帧
+    /// 没看懂
     fn find_pte_create(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
         let idxs = vpn.indexes();
         let mut ppn = self.root_ppn;
@@ -171,3 +183,29 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
     }
     v
 }
+
+/// Translate a Virtual Address to Physical Address
+pub fn get_physical(token: usize, ptr: usize) -> usize  {
+    
+    // 虚拟内存地址 的 偏移量
+    let virtual_address = VirtAddr::from(ptr);
+    let offset = virtual_address.page_offset();
+
+    //虚拟内存地址 的  页号
+    let vpn  = virtual_address.floor();
+
+    // 从页表里面，查询出虚拟页号，对应的物理页号；
+    let _page_table  = PageTable::from_token(token);
+    let ppn = _page_table.translate(vpn).unwrap().ppn();
+
+    let physical_address = ppn.0 << 12 | offset;
+    physical_address
+
+}
+
+// 计算机组成原理：简单页表和多级页表（虚拟内存的映射）
+// 总结一下，对于一个内存地址转换，其实就是这样三个步骤：
+
+// 把虚拟内存地址，切分成页号和偏移量的组合；
+// 从页表里面，查询出虚拟页号，对应的物理页号；
+// 直接拿物理页号，加上前面的偏移量，就得到了物理内存地址
