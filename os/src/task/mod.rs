@@ -20,7 +20,9 @@ mod processor;
 mod switch;
 #[allow(clippy::module_inception)]
 mod task;
-
+use crate::syscall::TaskInfo;//
+use crate::timer::get_time_us;//
+use crate::mm::VirtAddr;//
 use crate::loader::get_app_data_by_name;
 use alloc::sync::Arc;
 use lazy_static::*;
@@ -35,6 +37,8 @@ pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
     Processor,
 };
+
+
 /// Suspend the current 'Running' task and run the next task in task list.
 pub fn suspend_current_and_run_next() {
     // There must be an application running.
@@ -114,4 +118,57 @@ lazy_static! {
 ///Add init process to the manager
 pub fn add_initproc() {
     add_task(INITPROC.clone());
+}
+
+///还得适配之前的
+pub fn get_task_info() -> TaskInfo {
+    let cur_exec_task = current_task().unwrap();
+    // TaskControlBlock
+    let inner = cur_exec_task.inner_exclusive_access();
+
+    let task_info = TaskInfo {
+        status: TaskStatus::Running,
+        syscall_times: inner.syscall_count.clone(),
+        time: get_time_us()/1000 - inner.start_time,
+    };
+    task_info
+}
+
+/// add_syscall_count
+pub fn add_syscall_count(sys_call_id : usize)
+{
+    let cur_exec_task = current_task().unwrap();
+//这次记住了
+    cur_exec_task.inner_exclusive_access().syscall_count[sys_call_id] += 1;
+}
+
+/// current_task_map
+pub fn current_task_map(start: usize, len: usize, port: usize) -> isize {
+    let stat_virtadd = VirtAddr::from(start);
+    if stat_virtadd.aligned() == false {
+        return -1;
+    }
+    //current: Option<Arc<TaskControlBlock>>, 
+    let cur_task = current_task().unwrap();
+    //inner: UPSafeCell<TaskControlBlockInner>,
+    let mut task_inner = cur_task.inner_exclusive_access();
+
+    task_inner.memory_set.map_to_physical_range(start, len, port)
+
+
+}
+
+/// current_task_unmap
+pub fn current_task_unmap(start: usize, len: usize) -> isize {
+
+    let cpu_cur_task = current_task().unwrap();
+    let mut task_inner = cpu_cur_task.inner_exclusive_access();
+    task_inner.memory_set.unmap_range(start, len)
+}
+
+/// 设置正在执行的任务的优先级
+pub fn set_current_task_priority(prio: usize) {
+    let cpu_cur_task = current_task().unwrap();
+    let mut task_inner = cpu_cur_task.inner_exclusive_access();
+    task_inner.priority = prio;
 }

@@ -213,3 +213,15 @@ pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
         .unwrap()
         .get_mut()
 }
+/// Virtual Address to Physical Address
+pub fn get_physical(token: usize, ptr: usize) -> usize  {
+    let virtual_address = VirtAddr::from(ptr);//偏移
+    let offset = virtual_address.page_offset();//页号
+    let vpn  = virtual_address.floor();
+    // 虚拟->物理页号；
+    let _page_table  = PageTable::from_token(token);
+    let ppn = _page_table.translate(vpn).unwrap().ppn();
+
+    let physical_address = ppn.0 << 12 | offset;
+    physical_address
+}

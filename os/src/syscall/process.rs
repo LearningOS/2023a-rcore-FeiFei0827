@@ -1,20 +1,27 @@
 //! Process management syscalls
 use alloc::sync::Arc;
-
+use crate::mm::get_physical;//
+use crate::timer::get_time_us;//
+use crate::task::get_task_info;//
+use crate::task::current_task_map;//
+use crate::task::current_task_unmap;//
+use crate::task::TaskControlBlock;//
 use crate::{
     config::MAX_SYSCALL_NUM,
     loader::get_app_data_by_name,
     mm::{translated_refmut, translated_str},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next, TaskStatus,
+        suspend_current_and_run_next, TaskStatus,set_current_task_priority,
     },
 };
-
 #[repr(C)]
 #[derive(Debug)]
+/// Time value
 pub struct TimeVal {
+    ///秒
     pub sec: usize,
+    ///微秒
     pub usec: usize,
 }
 
@@ -22,11 +29,11 @@ pub struct TimeVal {
 #[allow(dead_code)]
 pub struct TaskInfo {
     /// Task status in it's life cycle
-    status: TaskStatus,
+   pub status: TaskStatus,
     /// The numbers of syscall called by task
-    syscall_times: [u32; MAX_SYSCALL_NUM],
+   pub syscall_times: [u32; MAX_SYSCALL_NUM],
     /// Total running time of task
-    time: usize,
+   pub time: usize,
 }
 
 /// task exits and submit an exit code
@@ -42,12 +49,12 @@ pub fn sys_yield() -> isize {
     suspend_current_and_run_next();
     0
 }
-
+///得到pid
 pub fn sys_getpid() -> isize {
     trace!("kernel: sys_getpid pid:{}", current_task().unwrap().pid.0);
     current_task().unwrap().pid.0 as isize
 }
-
+///子
 pub fn sys_fork() -> isize {
     trace!("kernel:pid[{}] sys_fork", current_task().unwrap().pid.0);
     let current_task = current_task().unwrap();
@@ -62,7 +69,7 @@ pub fn sys_fork() -> isize {
     add_task(new_task);
     new_pid as isize
 }
-
+///动态执行
 pub fn sys_exec(path: *const u8) -> isize {
     trace!("kernel:pid[{}] sys_exec", current_task().unwrap().pid.0);
     let token = current_user_token();
@@ -122,7 +129,16 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
         "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let us = get_time_us();
+    let physical_address = get_physical(current_user_token(), _ts as usize);
+    let ptr = physical_address as *mut TimeVal;
+    unsafe {
+        *ptr = TimeVal {
+            sec: us / 1_000_000,
+            usec: us % 1_000_000,
+        };
+    }
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
@@ -133,7 +149,12 @@ pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
         "kernel:pid[{}] sys_task_info NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let physical_address = get_physical(current_user_token(), _ti as usize);
+    let ptr = physical_address as *mut TaskInfo;
+    unsafe{
+        *ptr = get_task_info();
+    }
+    0
 }
 
 /// YOUR JOB: Implement mmap.
@@ -142,7 +163,10 @@ pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
         "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if (_port & !0x7) != 0 || (_port & 0x7) == 0 {
+        return -1
+    }
+    current_task_map(_start, _len, _port)
 }
 
 /// YOUR JOB: Implement munmap.
@@ -151,7 +175,7 @@ pub fn sys_munmap(_start: usize, _len: usize) -> isize {
         "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    current_task_unmap(_start, _len)
 }
 
 /// change data segment size
@@ -171,14 +195,34 @@ pub fn sys_spawn(_path: *const u8) -> isize {
         "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let token = current_user_token();
+    let path =translated_str(token, _path);
+    if let Some(data) = get_app_data_by_name(path.as_str())//没有 to_str
+     {
+        let task = Arc::new(TaskControlBlock::new(data)); 
+        let parent = current_task().unwrap();//指导书中有详细
+        parent.inner_exclusive_access().children.push(task.clone());
+        task.inner_exclusive_access().parent = Some(Arc::downgrade(&parent));
+        let pid = task.pid.0 as isize;
+        add_task(task);
+        pid 
+        // 返回子进程id
+    } else {
+        -1
+    }
 }
 
-// YOUR JOB: Set task priority.
+/// YOUR JOB: Set task priority.
+/// 非要注释
 pub fn sys_set_priority(_prio: isize) -> isize {
     trace!(
         "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if _prio <= 1 {
+        -1
+    } else {
+        set_current_task_priority(_prio as usize);
+        _prio
+    }
 }

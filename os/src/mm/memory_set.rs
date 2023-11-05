@@ -300,6 +300,40 @@ impl MemorySet {
             false
         }
     }
+      /// map the vpn and ppn
+    pub fn map_to_physical_range(&mut self, start: usize, len: usize, prot: usize) -> isize {
+        let start_vpn = VirtAddr::from(start).floor().0;
+        let end_vpn = VirtAddr::from(start + len - 1).floor().0; //别忘了-1
+        let flags = PTEFlags::from_bits((prot << 1) as u8).unwrap() | PTEFlags::U;//
+
+        for cur_vpn in start_vpn..=end_vpn {
+            if let Some(pte) = self.translate(VirtPageNum::from(cur_vpn)) {
+                if pte.is_valid() {
+                    return -1;
+                }
+            }
+            self.page_table.map(VirtPageNum::from(cur_vpn),frame_alloc().unwrap().ppn,flags,);
+        }
+        0
+    }
+
+    /// 与ch4相似
+    pub fn unmap_range(&mut self, start: usize, len: usize) -> isize {
+        let st_vpn = VirtAddr::from(start).floor().0;
+        let ed_vpn = VirtAddr::from(start + len - 1).floor().0;//一样
+        for cur_vpn in st_vpn..=ed_vpn {
+            if let Some(pte) = self.translate(VirtPageNum::from(cur_vpn)) {
+                if pte.is_valid() {
+                    self.page_table.unmap(VirtPageNum::from(cur_vpn));
+                } else {
+                    return -1;
+                }
+            } else {
+                return -1;
+            }
+        }
+        0
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {

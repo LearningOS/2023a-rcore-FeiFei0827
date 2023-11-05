@@ -13,6 +13,7 @@ use alloc::sync::Arc;
 use lazy_static::*;
 
 /// Processor management structure
+///根据v3所描述的
 pub struct Processor {
     ///The task currently executing on the current processor
     current: Option<Arc<TaskControlBlock>>,

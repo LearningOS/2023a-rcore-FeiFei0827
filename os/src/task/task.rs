@@ -5,10 +5,10 @@ use crate::config::TRAP_CONTEXT_BASE;
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
+use crate::config::MAX_SYSCALL_NUM;//
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::cell::RefMut;
-
 /// Task control block structure
 ///
 /// Directly save the contents that will not change during running
@@ -68,6 +68,18 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+    
+    ///sys调用次数
+    pub syscall_count: [u32;MAX_SYSCALL_NUM], 
+    
+    ///启动的时间 
+    pub start_time: usize,
+   
+    /// 任务调度：表示该进程当前已经运行的长度//
+    pub stride: usize,
+     
+    /// 优先级
+    pub priority: usize,
 }
 
 impl TaskControlBlockInner {
@@ -118,6 +130,10 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    syscall_count:[0 as u32; MAX_SYSCALL_NUM],
+                    start_time:0 as usize,
+                    stride:0 as usize,
+                    priority:16 as usize,
                 })
             },
         };
@@ -191,6 +207,10 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    syscall_count:parent_inner.syscall_count.clone(),
+                    start_time:parent_inner.start_time,
+                    stride: parent_inner.stride,
+                    priority: parent_inner.priority,
                 })
             },
         });
